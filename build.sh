@@ -1,12 +1,12 @@
 #!/bin/zsh
-# Baut "Claude Traffic Light.app" und installiert es nach ~/Applications.
+# Builds Lumen.app and (optionally) installs it to ~/Applications.
 set -e
 cd "$(dirname "$0")"
-APP="build/Claude Traffic Light.app"
+APP="build/Lumen.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-# 分别编译 arm64 和 x86_64，再合并为 universal 二进制，Apple 芯片和 Intel Mac 都能直接运行
+# Build arm64 and x86_64 separately, then merge into a universal binary (Apple Silicon + Intel)
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 for ARCH in arm64 x86_64; do
@@ -16,13 +16,16 @@ done
 lipo -create -output "$APP/Contents/MacOS/ClaudeTrafficLight" \
   "$TMP/ClaudeTrafficLight-arm64" "$TMP/ClaudeTrafficLight-x86_64"
 
+cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>Claude Traffic Light</string>
-  <key>CFBundleDisplayName</key><string>Claude 红绿灯</string>
+  <key>CFBundleName</key><string>Lumen</string>
+  <key>CFBundleDisplayName</key><string>Lumen</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIdentifier</key><string>local.claude.trafficlight</string>
   <key>CFBundleExecutable</key><string>ClaudeTrafficLight</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -41,10 +44,11 @@ codesign --force --sign - "$APP"
 if [[ "$1" == "--install" ]]; then
   mkdir -p ~/Applications
   pkill -x ClaudeTrafficLight 2>/dev/null || true
-  rm -rf ~/Applications/"Claude Traffic Light.app"
+  rm -rf ~/Applications/"Claude Traffic Light.app"   # legacy name before the rename to Lumen
+  rm -rf ~/Applications/Lumen.app
   cp -R "$APP" ~/Applications/
-  open ~/Applications/"Claude Traffic Light.app"
-  echo "Installiert und gestartet: ~/Applications/Claude Traffic Light.app"
+  open ~/Applications/Lumen.app
+  echo "Installed and started: ~/Applications/Lumen.app"
 else
-  echo "Gebaut: $APP  (mit --install nach ~/Applications kopieren und starten)"
+  echo "Built: $APP  (use --install to copy it to ~/Applications and launch)"
 fi

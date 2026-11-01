@@ -1,56 +1,80 @@
-# Claude Code 红绿灯
+<div align="center">
 
-![platform](https://img.shields.io/badge/macOS-13%2B-blue) ![swift](https://img.shields.io/badge/Swift-single%20file-orange) ![license](https://img.shields.io/badge/license-MIT-green)
+<img src="docs/banner.png" alt="Lumen – a traffic light for Claude Code" width="100%">
 
-置顶悬浮的红绿灯 + 菜单栏图标，实时显示 Claude Code 状态，并在下方显示订阅 5h / 7d 窗口的剩余额度。
+# Lumen
 
-![预览](docs/preview.png)
+**A floating traffic light for Claude Code – and a live gauge of your remaining quota.**
 
-| 灯 | 含义 | 触发 |
+[![macOS 13+](https://img.shields.io/badge/macOS-13%2B-blue)](#requirements)
+[![Swift](https://img.shields.io/badge/Swift-single%20file-orange)](Sources/main.swift)
+[![Build](https://github.com/ClarkeLi/Lumen/actions/workflows/build.yml/badge.svg)](https://github.com/ClarkeLi/Lumen/actions/workflows/build.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+English · [简体中文](README.zh-CN.md) · [Deutsch](README.de.md)
+
+</div>
+
+Lumen sits on top of your windows (and in the menu bar) and tells you at a glance what Claude Code is doing – so you can look away while it works and come back exactly when it needs you. Below the light, a small gauge shows how much of your **5-hour and 7-day** subscription quota is **left**.
+
+<div align="center">
+<img src="docs/states.png" alt="Lumen states: working, needs you, waiting, idle" width="100%">
+</div>
+
+## Features
+
+- **Always-on-top traffic light** + menu bar icon, draggable, position is remembered
+- **Four states** driven by Claude Code hooks – no polling of terminal output
+- **Multi-session aware** – with several sessions running, the most urgent one wins (🟡 > 🔴 > 🟢)
+- **Quota gauge** – remaining % for the 5h and 7d windows with colour-coded bars and reset times
+- Three sizes, launch at login, one-click hook uninstall, zero dependencies
+
+| Light | Meaning | Triggered by |
 |---|---|---|
-| 🔴 | 工作中 | `UserPromptSubmit`、`PreToolUse`、`PostToolUse` |
-| 🟡（闪烁） | 需要人介入 | `PermissionRequest`、权限通知、`AskUserQuestion`、`ExitPlanMode` |
-| 🟢 | 任务停止，等待输入 | `Stop`、`SessionStart`、用户按 Esc 中断 |
-| ⚪️ | 没有运行中的 Claude Code | — |
+| 🔴 | Working | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` |
+| 🟡 (blinking) | Needs you | `PermissionRequest`, permission notifications, `AskUserQuestion`, `ExitPlanMode` |
+| 🟢 | Done, waiting for input | `Stop`, `SessionStart`, user interrupt (Esc) |
+| ⚪️ | No Claude Code running | – |
 
-多个会话同时运行时：🟡 > 🔴 > 🟢。
-
-## 额度显示
-
-红绿灯下方的小面板显示 Claude 订阅 **5 小时 / 7 天窗口的剩余额度**（百分比 + 进度条）：
-
-- 进度条颜色：剩余 > 40% 绿，15–40% 黄，< 15% 红；拿不到数据显示 `--`，数据超过 10 分钟没更新会变暗
-- 鼠标悬停 / 菜单里可看到各窗口的重置时间
-- 数据来源：用本机 Claude Code 登录凭证（钥匙串 `Claude Code-credentials`）每 3 分钟请求一次 `api.anthropic.com/api/oauth/usage`（非公开接口，将来可能变动）；凭证只用于这次请求，不会保存
-- 首次读取钥匙串时 macOS 可能弹窗，选「始终允许」即可
-- 菜单 →「显示额度」可随时关闭，关闭后恢复原来的纯红绿灯，也不再发请求
-
-## 安装
+## Install
 
 ```sh
-./build.sh --install   # 编译、复制到 ~/Applications 并启动
+git clone https://github.com/ClarkeLi/Lumen.git
+cd Lumen
+./build.sh --install   # build, copy to ~/Applications and launch
 ```
 
-首次启动会自动把 hooks 写入 `~/.claude/settings.json`（原文件备份为 `settings.json.trafficlight-backup`）。
-新开的 Claude Code 会话即可被识别。
+On first launch Lumen writes its hooks into `~/.claude/settings.json` (the original is backed up as `settings.json.trafficlight-backup`). Newly started Claude Code sessions are picked up automatically.
 
-## 使用
+> **Note:** the menu and tooltips are currently in Chinese. Translations are welcome as pull requests.
 
-- 拖动红绿灯可移动位置（自动记住）；右键红绿灯 = 菜单栏菜单
-- 菜单栏：开启/关闭、显示/隐藏悬浮灯、大小、开机启动、卸载 hooks、退出
+## Usage
 
-## 系统要求与构建
+- Drag the light to move it; right-click it for the menu
+- Menu bar: enable/disable, show/hide the floating light, show/hide the quota gauge, size, launch at login, uninstall hooks, quit
 
-- macOS 13+，需要 Xcode Command Line Tools（`xcode-select --install`）
-- 无第三方依赖，整个应用只有 `Sources/main.swift` 一个文件
-- `./build.sh` 只构建（输出到 `build/`），`./build.sh --install` 构建并安装
+## Quota gauge
 
-## 隐私与免责
+The gauge shows what is **left**, not what is used:
 
-- 所有状态数据都只保存在本机 `~/.claude/traffic-light/`
-- 额度功能仅向 `api.anthropic.com` 发起请求，使用的是非公开接口，随时可能失效
-- 本项目为非官方项目，与 Anthropic 无关；Claude 是 Anthropic 的商标
+- Bar colour: > 40 % green, 15–40 % yellow, < 15 % red. `--` means no data yet; values older than 10 minutes are dimmed
+- Hover the light or open the menu to see the reset time of each window
+- **Data source:** every 3 minutes Lumen reads Claude Code's OAuth token from the macOS Keychain (`Claude Code-credentials`) and calls `api.anthropic.com/api/oauth/usage`. This is an **undocumented endpoint** and may change or stop working at any time. The token is used only for this request and never stored
+- macOS may ask for Keychain access on first use – choose "Always Allow"
+- Turn it off in the menu ("Show quota") and Lumen goes back to a plain traffic light and makes no requests
 
-## 许可证
+## Requirements
 
-[MIT](LICENSE)
+- macOS 13 or later, Xcode Command Line Tools (`xcode-select --install`)
+- No third-party dependencies – the whole app is `Sources/main.swift`
+- `./build.sh` builds a universal (Apple Silicon + Intel) app into `build/`; `./build.sh --install` also installs it
+
+## Privacy & disclaimer
+
+- All state stays on your machine in `~/.claude/traffic-light/`
+- The quota feature only talks to `api.anthropic.com`
+- Lumen is an unofficial community project and is not affiliated with Anthropic. Claude is a trademark of Anthropic
+
+## License
+
+[MIT](LICENSE) © Clarke Li

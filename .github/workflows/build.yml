@@ -12,5 +12,5 @@ jobs:
         run: ./build.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: Claude-Traffic-Light
-          path: build/Claude Traffic Light.app
+          name: Lumen
+          path: build/Lumen.app
