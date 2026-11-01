@@ -360,12 +360,12 @@ func quotaStatusColor(_ remaining: Double) -> NSColor {
 
 final class TrafficLightView: NSView {
     /// Höhe des Kontingent-Bereichs unter der Ampel (bei Skalierung 1.0)
-    static let gaugeAreaHeight: CGFloat = 76
+    static let gaugeAreaHeight: CGFloat = 70
     /// Breite des Fensters mit / ohne Kontingent-Sockel (bei Skalierung 1.0)
     static let panelWidth: CGFloat = 58
-    static let panelWidthWithQuota: CGFloat = 74
+    static let panelWidthWithQuota: CGFloat = 66
     static let panelHeight: CGFloat = 150
-    static let panelHeightWithQuota: CGFloat = 232
+    static let panelHeightWithQuota: CGFloat = 220
 
     var state: LightState = .off { didSet { needsDisplay = true } }
     var quota: QuotaSnapshot? { didSet { needsDisplay = true } }
@@ -389,13 +389,13 @@ final class TrafficLightView: NSView {
     /// Zeichnet die Kapsel mit den zwei Restanzeigen (5h / 7d).
     private func drawGauge(in rect: NSRect, wellRadius: CGFloat) {
         let s = uiScale
-        // Eingelassenes Display im Gehäuse: dunkler als der Rahmen, feine Innenkante
-        let well = NSBezierPath(roundedRect: rect, xRadius: wellRadius, yRadius: wellRadius)
-        NSGradient(starting: NSColor(white: 0.02, alpha: 0.80), ending: NSColor(white: 0.07, alpha: 0.80))?
-            .draw(in: well, angle: -90)
-        NSColor(white: 1, alpha: 0.07).setStroke()
-        well.lineWidth = 1
-        well.stroke()
+        // Eigene Karte, gleiches Material und gleiche Breite wie das Ampelgehäuse
+        let card = NSBezierPath(roundedRect: rect, xRadius: wellRadius, yRadius: wellRadius)
+        NSGradient(starting: NSColor(white: 0.22, alpha: 0.96), ending: NSColor(white: 0.08, alpha: 0.96))?
+            .draw(in: card, angle: -90)
+        NSColor(white: 0.45, alpha: 0.6).setStroke()
+        card.lineWidth = 1
+        card.stroke()
 
         let dim: CGFloat = (quota?.isStale ?? false) ? 0.5 : 1.0
         let rows: [(String, QuotaWindow?)] = [("5h", quota?.fiveHour), ("7d", quota?.sevenDay)]
@@ -446,13 +446,11 @@ final class TrafficLightView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let pad: CGFloat = 6   // Platz für den Leuchtschein
-        let body = bounds.insetBy(dx: pad, dy: pad)
         let section = showQuota ? Self.gaugeAreaHeight * uiScale : 0
-        // Lampenbereich = Gehäuse ohne den Display-Sockel
-        let lampsBody = NSRect(x: body.minX, y: body.minY + section, width: body.width, height: body.height - section)
-        let radius = body.width * (showQuota ? 0.30 : 0.32)
+        // Ampelgehäuse: symmetrisch, oben; die Karte darunter hat dieselbe Breite
+        let body = NSRect(x: pad, y: section + pad, width: bounds.width - pad * 2, height: bounds.height - section - pad * 2)
+        let radius = body.width * 0.32
 
-        // Gehäuse (ein Stück für Lampen und Display)
         let housing = NSBezierPath(roundedRect: body, xRadius: radius, yRadius: radius)
         NSGradient(starting: NSColor(white: 0.22, alpha: 0.96), ending: NSColor(white: 0.08, alpha: 0.96))?
             .draw(in: housing, angle: -90)
@@ -461,18 +459,17 @@ final class TrafficLightView: NSView {
         housing.stroke()
 
         if showQuota {
-            let m = 5 * uiScale
-            let well = NSRect(x: body.minX + m, y: body.minY + m, width: body.width - 2 * m, height: section - m - 3 * uiScale)
-            drawGauge(in: well, wellRadius: radius - m)
+            let card = NSRect(x: body.minX, y: pad, width: body.width, height: section - 6 * uiScale)
+            drawGauge(in: card, wellRadius: 15 * uiScale)
         }
 
         // Drei Lampen von oben nach unten: rot, gelb, grün
         let lamps: [LightState] = [.red, .yellow, .green]
-        let slot = lampsBody.height / 3
-        let d = min(lampsBody.width * 0.68, slot * 0.78)
+        let slot = body.height / 3
+        let d = min(body.width * 0.68, slot * 0.78)
         for (i, lamp) in lamps.enumerated() {
-            let cy = lampsBody.maxY - slot * (CGFloat(i) + 0.5)
-            let rect = NSRect(x: lampsBody.midX - d / 2, y: cy - d / 2, width: d, height: d)
+            let cy = body.maxY - slot * (CGFloat(i) + 0.5)
+            let rect = NSRect(x: body.midX - d / 2, y: cy - d / 2, width: d, height: d)
             let circle = NSBezierPath(ovalIn: rect)
             let c = color(for: lamp)
             let lit = lamp == state && (state != .yellow || blinkOn)
