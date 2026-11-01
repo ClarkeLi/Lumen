@@ -276,6 +276,18 @@ struct QuotaWindow {
     var used: Double          // verbrauchte Prozent (0–100)
     var resetsAt: Date?
     var remaining: Double { max(0, min(100, 100 - used)) }
+
+    var isExpired: Bool { resetsAt.map { $0 <= Date() } ?? false }
+
+    /// Kompakte Restzeit bis zum Reset: "42m", "2h14m", "4d3h". nil = unbekannt oder bereits abgelaufen.
+    var countdown: String? {
+        guard let r = resetsAt else { return nil }
+        let mins = Int((r.timeIntervalSinceNow / 60).rounded(.up))
+        guard mins > 0 else { return nil }
+        if mins < 60 { return "\(mins)m" }
+        if mins < 24 * 60 { return "\(mins / 60)h\(String(format: "%02d", mins % 60))m" }
+        return "\(mins / 1440)d\((mins % 1440) / 60)h"
+    }
 }
 
 struct QuotaSnapshot {
@@ -341,7 +353,7 @@ enum QuotaFetcher {
 
 final class TrafficLightView: NSView {
     /// Höhe des Kontingent-Bereichs unter der Ampel (bei Skalierung 1.0)
-    static let gaugeAreaHeight: CGFloat = 48
+    static let gaugeAreaHeight: CGFloat = 72
 
     var state: LightState = .off { didSet { needsDisplay = true } }
     var quota: QuotaSnapshot? { didSet { needsDisplay = true } }
@@ -382,13 +394,21 @@ final class TrafficLightView: NSView {
         let inset = 6 * s
         let font = NSFont.monospacedDigitSystemFont(ofSize: 8.5 * s, weight: .semibold)
         let barH = 3.5 * s
+        let small = NSFont.monospacedDigitSystemFont(ofSize: 7.5 * s, weight: .medium)
 
         for (i, row) in rows.enumerated() {
             let rowTop = rect.maxY - rowH * CGFloat(i)
-            let contentH = font.capHeight + 3 * s + barH
-            let bottom = rowTop - rowH / 2 - contentH / 2
+            let contentH = font.capHeight + 3 * s + barH + 5.5 * s + small.capHeight
+            let contentBottom = rowTop - rowH / 2 - contentH / 2
+            let bottom = contentBottom + small.capHeight + 5.5 * s   // Unterkante des Balkens
             let x = rect.minX + inset
             let w = rect.width - inset * 2
+
+            // Restzeit bis zum Reset
+            let cdText = row.1 == nil ? "" : "↻ " + (row.1?.countdown ?? "…")
+            NSAttributedString(string: cdText, attributes: [
+                .font: small, .foregroundColor: NSColor(white: 1, alpha: 0.5 * dim)])
+                .draw(at: NSPoint(x: x, y: contentBottom - small.descender))
 
             // Balken
             let track = NSRect(x: x, y: bottom, width: w, height: barH)
@@ -508,6 +528,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         get { defaults.object(forKey: "showQuota") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "showQuota") }
     }
+    private var showStatusQuota: Bool {
+        get { defaults.object(forKey: "showStatusQuota") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "showStatusQuota") }
+    }
+    private var lastQuotaAttempt = Date.distantPast
+    private var lastMinute = 0
     private var quota: QuotaSnapshot?
     private var quotaFetching = false
     private var nextQuotaFetch = Date.distantPast
@@ -608,15 +634,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             lightView.state = state
             lightView.blinkOn = true
         }
-        statusItem.button?.title = monitoringEnabled ? state.emoji : "⚫️"
+        statusItem.button?.attributedTitle = statusTitle(state)
+        let minute = Int(Date().timeIntervalSince1970 / 60)
+        if minute != lastMinute { lastMinute = minute; lightView.needsDisplay = true }
         statusItem.button?.toolTip = "Claude Code 红绿灯 – " + (monitoringEnabled ? state.label : "已暂停")
         lightView.toolTip = tooltipText()
         updatePanelVisibility()
         refreshQuotaIfNeeded()
     }
 
+    /// Menüleisten-Titel: Ampel-Emoji + Rest-% und Zeit bis zum Reset je Fenster.
+    private func statusTitle(_ state: LightState) -> NSAttributedString {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        guard monitoringEnabled else { return NSAttributedString(string: "⚫️", attributes: [.font: font]) }
+        var text = state.emoji
+        if showQuota, showStatusQuota, let q = quota {
+            for (name, w) in [("5h", q.fiveHour), ("7d", q.sevenDay)] {
+                guard let w else { continue }
+                text += " \(name) \(Int(w.remaining.rounded()))%·\(w.countdown ?? "…")"
+            }
+        }
+        return NSAttributedString(string: text, attributes: [.font: font])
+    }
+
     private func refreshQuotaIfNeeded() {
-        guard monitoringEnabled, showQuota, !quotaFetching, Date() >= nextQuotaFetch else { return }
+        guard monitoringEnabled, showQuota, !quotaFetching else { return }
+        let now = Date()
+        // Ein Fenster ist gerade abgelaufen → nicht auf den nächsten Takt warten
+        let expired = [quota?.fiveHour, quota?.sevenDay].contains { $0?.isExpired ?? false }
+        guard now >= nextQuotaFetch || (expired && now.timeIntervalSince(lastQuotaAttempt) > 30) else { return }
+        lastQuotaAttempt = now
         quotaFetching = true
         QuotaFetcher.fetch { [weak self] snap in
             guard let self else { return }
@@ -638,7 +685,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let r = w.resetsAt {
             let f = DateFormatter()
             f.dateFormat = resetFormat
-            line += "  ·  \(f.string(from: r)) 重置"
+            line += "  ·  " + (w.countdown.map { "\($0) 后重置（\(f.string(from: r))）" } ?? "即将重置")
         }
         return line
     }
@@ -697,6 +744,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         addItem(menu, "显示悬浮红绿灯", #selector(toggleVisible), "", checked: lightVisible).isEnabled = monitoringEnabled
 
         addItem(menu, "显示额度（5h / 7d 剩余）", #selector(toggleQuota), "", checked: showQuota)
+        addItem(menu, "在菜单栏显示额度和重置时间", #selector(toggleStatusQuota), "", checked: showStatusQuota).isEnabled = showQuota
         let sizeItem = NSMenuItem(title: "大小", action: nil, keyEquivalent: "")
         let sizeMenu = NSMenu()
         for (title, value) in [("小", 0.75), ("中", 1.0), ("大", 1.35)] {
@@ -734,6 +782,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         scale = CGFloat(v)
         applyPanelSize()
     }
+
+    @objc private func toggleStatusQuota() { showStatusQuota.toggle(); tick() }
 
     @objc private func toggleQuota() {
         showQuota.toggle()

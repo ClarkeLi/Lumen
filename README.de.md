@@ -15,7 +15,7 @@
 
 </div>
 
-Lumen schwebt über allen Fenstern (und in der Menüleiste) und zeigt auf einen Blick, was Claude Code gerade tut – du kannst wegschauen, solange es arbeitet, und kommst genau dann zurück, wenn es dich braucht. Unter der Ampel zeigt ein kleines Messgerät, wie viel von deinem **5-Stunden- und 7-Tage**-Abo-Kontingent noch **übrig** ist.
+Lumen schwebt über allen Fenstern (und in der Menüleiste) und zeigt auf einen Blick, was Claude Code gerade tut – du kannst wegschauen, solange es arbeitet, und kommst genau dann zurück, wenn es dich braucht. Unter der Ampel zeigt ein kleines Messgerät, wie viel von deinem **5-Stunden- und 7-Tage**-Abo-Kontingent noch **übrig** ist und wie lange es bis zum **Reset** dauert.
 
 <div align="center">
 <img src="docs/states.png" alt="Lumen-Zustände: arbeitet, braucht dich, wartet, inaktiv" width="100%">
@@ -26,7 +26,8 @@ Lumen schwebt über allen Fenstern (und in der Menüleiste) und zeigt auf einen 
 - **Immer sichtbare Ampel** + Menüleisten-Symbol, verschiebbar, Position wird gespeichert
 - **Vier Zustände**, gesteuert über Claude-Code-Hooks – kein Auslesen der Terminalausgabe
 - **Mehrere Sessions**: Bei mehreren laufenden Sessions gewinnt die dringendste (🟡 > 🔴 > 🟢)
-- **Kontingent-Anzeige**: verbleibende Prozent für das 5h- und 7d-Fenster, farbige Balken, Zeitpunkt des Resets
+- **Kontingent-Anzeige**: verbleibende Prozent für das 5h- und 7d-Fenster, farbige Balken und ein Live-Countdown bis zum nächsten Reset
+- **Menüleisten-Anzeige**: z. B. `🟢 5h 94%·2h14m 7d 37%·4d3h` – verbleibendes Kontingent und Zeit bis zum Reset immer im Blick
 - Drei Größen, Start bei der Anmeldung, Hooks mit einem Klick entfernen, keine Abhängigkeiten
 
 | Licht | Bedeutung | Ausgelöst durch |
@@ -51,14 +52,16 @@ Beim ersten Start trägt Lumen seine Hooks in `~/.claude/settings.json` ein (das
 ## Bedienung
 
 - Ampel ziehen zum Verschieben; Rechtsklick öffnet das Menü
-- Menüleiste: ein/aus, schwebende Ampel ein-/ausblenden, Kontingent ein-/ausblenden, Größe, Start bei der Anmeldung, Hooks entfernen, Beenden
+- Menüleiste: ein/aus, schwebende Ampel ein-/ausblenden, Kontingent ein-/ausblenden, Kontingent in der Menüleiste, Größe, Start bei der Anmeldung, Hooks entfernen, Beenden
 
 ## Kontingent-Anzeige
 
 Angezeigt wird, was **übrig** ist – nicht, was verbraucht wurde:
 
 - Balkenfarbe: > 40 % grün, 15–40 % gelb, < 15 % rot. `--` heißt: noch keine Daten; Werte, die älter als 10 Minuten sind, werden abgedunkelt
-- Mit dem Mauszeiger über der Ampel oder im Menü siehst du den Reset-Zeitpunkt jedes Fensters
+- `↻ 2h14m` unter jedem Balken ist die Zeit bis zum Reset des Fensters; dieselben Werte stehen in der Menüleiste (`5h 94%·2h14m`). Mit dem Mauszeiger über der Ampel oder im Menü siehst du den genauen Zeitpunkt
+- Sobald ein Fenster zurückgesetzt wird, aktualisiert Lumen die Werte sofort
+- Die Menüleisten-Anzeige lässt sich im Menü separat ausschalten
 - **Datenquelle:** Alle 3 Minuten liest Lumen das OAuth-Token von Claude Code aus dem macOS-Schlüsselbund (`Claude Code-credentials`) und ruft `api.anthropic.com/api/oauth/usage` auf. Das ist ein **nicht dokumentierter Endpunkt**, der sich jederzeit ändern oder wegfallen kann. Das Token wird nur für diese Anfrage verwendet und nie gespeichert
 - macOS fragt beim ersten Zugriff ggf. nach Schlüsselbund-Zugriff – „Immer erlauben“ wählen
 - Im Menü „Kontingent anzeigen“ deaktivieren: Lumen ist wieder eine reine Ampel und sendet keine Anfragen
