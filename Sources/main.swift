@@ -360,10 +360,12 @@ func quotaStatusColor(_ remaining: Double) -> NSColor {
 
 final class TrafficLightView: NSView {
     /// Höhe des Kontingent-Bereichs unter der Ampel (bei Skalierung 1.0)
-    static let gaugeAreaHeight: CGFloat = 80
+    static let gaugeAreaHeight: CGFloat = 76
     /// Breite des Fensters mit / ohne Kontingent-Sockel (bei Skalierung 1.0)
     static let panelWidth: CGFloat = 58
-    static let panelWidthWithQuota: CGFloat = 78
+    static let panelWidthWithQuota: CGFloat = 74
+    static let panelHeight: CGFloat = 150
+    static let panelHeightWithQuota: CGFloat = 232
 
     var state: LightState = .off { didSet { needsDisplay = true } }
     var quota: QuotaSnapshot? { didSet { needsDisplay = true } }
@@ -385,22 +387,23 @@ final class TrafficLightView: NSView {
     }
 
     /// Zeichnet die Kapsel mit den zwei Restanzeigen (5h / 7d).
-    private func drawGauge(in rect: NSRect) {
+    private func drawGauge(in rect: NSRect, wellRadius: CGFloat) {
         let s = uiScale
-        let capsule = NSBezierPath(roundedRect: rect, xRadius: 12 * s, yRadius: 12 * s)
-        NSGradient(starting: NSColor(white: 0.20, alpha: 0.96), ending: NSColor(white: 0.08, alpha: 0.96))?
-            .draw(in: capsule, angle: -90)
-        NSColor(white: 0.45, alpha: 0.6).setStroke()
-        capsule.lineWidth = 1
-        capsule.stroke()
+        // Eingelassenes Display im Gehäuse: dunkler als der Rahmen, feine Innenkante
+        let well = NSBezierPath(roundedRect: rect, xRadius: wellRadius, yRadius: wellRadius)
+        NSGradient(starting: NSColor(white: 0.02, alpha: 0.80), ending: NSColor(white: 0.07, alpha: 0.80))?
+            .draw(in: well, angle: -90)
+        NSColor(white: 1, alpha: 0.07).setStroke()
+        well.lineWidth = 1
+        well.stroke()
 
         let dim: CGFloat = (quota?.isStale ?? false) ? 0.5 : 1.0
         let rows: [(String, QuotaWindow?)] = [("5h", quota?.fiveHour), ("7d", quota?.sevenDay)]
         let rowH = rect.height / 2
-        let x = rect.minX + 9 * s
-        let w = rect.width - 18 * s
+        let x = rect.minX + 7 * s
+        let w = rect.width - 14 * s
         let labelFont = NSFont.systemFont(ofSize: 8 * s, weight: .semibold)
-        let pctFont = NSFont.monospacedDigitSystemFont(ofSize: 12 * s, weight: .bold)
+        let pctFont = NSFont.monospacedDigitSystemFont(ofSize: 11.5 * s, weight: .bold)
         let smallFont = NSFont.monospacedDigitSystemFont(ofSize: 7.5 * s, weight: .medium)
         let barH = 4 * s
         let gap = 3.5 * s
@@ -443,20 +446,13 @@ final class TrafficLightView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let pad: CGFloat = 6   // Platz für den Leuchtschein
-        var lightsBounds = bounds
-        var housingW = bounds.width - pad * 2
-        if showQuota {
-            let gaugeH = Self.gaugeAreaHeight * uiScale
-            lightsBounds = NSRect(x: 0, y: gaugeH, width: bounds.width, height: bounds.height - gaugeH)
-            housingW = Self.panelWidth * uiScale - pad * 2
-            drawGauge(in: NSRect(x: pad, y: pad, width: bounds.width - pad * 2, height: gaugeH - 4 * uiScale))
-        }
-        let inner = lightsBounds.insetBy(dx: 0, dy: pad)
-        let body = NSRect(x: lightsBounds.midX - housingW / 2, y: inner.minY, width: housingW, height: inner.height)
+        let body = bounds.insetBy(dx: pad, dy: pad)
+        let section = showQuota ? Self.gaugeAreaHeight * uiScale : 0
+        // Lampenbereich = Gehäuse ohne den Display-Sockel
+        let lampsBody = NSRect(x: body.minX, y: body.minY + section, width: body.width, height: body.height - section)
+        let radius = body.width * (showQuota ? 0.30 : 0.32)
 
-        let radius = body.width * 0.32
-
-        // Gehäuse
+        // Gehäuse (ein Stück für Lampen und Display)
         let housing = NSBezierPath(roundedRect: body, xRadius: radius, yRadius: radius)
         NSGradient(starting: NSColor(white: 0.22, alpha: 0.96), ending: NSColor(white: 0.08, alpha: 0.96))?
             .draw(in: housing, angle: -90)
@@ -464,13 +460,19 @@ final class TrafficLightView: NSView {
         housing.lineWidth = 1
         housing.stroke()
 
+        if showQuota {
+            let m = 5 * uiScale
+            let well = NSRect(x: body.minX + m, y: body.minY + m, width: body.width - 2 * m, height: section - m - 3 * uiScale)
+            drawGauge(in: well, wellRadius: radius - m)
+        }
+
         // Drei Lampen von oben nach unten: rot, gelb, grün
         let lamps: [LightState] = [.red, .yellow, .green]
-        let slot = body.height / 3
-        let d = min(body.width * 0.68, slot * 0.78)
+        let slot = lampsBody.height / 3
+        let d = min(lampsBody.width * 0.68, slot * 0.78)
         for (i, lamp) in lamps.enumerated() {
-            let cy = body.maxY - slot * (CGFloat(i) + 0.5)
-            let rect = NSRect(x: body.midX - d / 2, y: cy - d / 2, width: d, height: d)
+            let cy = lampsBody.maxY - slot * (CGFloat(i) + 0.5)
+            let rect = NSRect(x: lampsBody.midX - d / 2, y: cy - d / 2, width: d, height: d)
             let circle = NSBezierPath(ovalIn: rect)
             let c = color(for: lamp)
             let lit = lamp == state && (state != .yellow || blinkOn)
@@ -564,7 +566,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var baseSize: NSSize {
         NSSize(width: (showQuota ? TrafficLightView.panelWidthWithQuota : TrafficLightView.panelWidth) * scale,
-               height: (150 + (showQuota ? TrafficLightView.gaugeAreaHeight : 0)) * scale)
+               height: (showQuota ? TrafficLightView.panelHeightWithQuota : TrafficLightView.panelHeight) * scale)
     }
 
     /// Fenstergröße anpassen; die Oberkante bleibt an Ort und Stelle.

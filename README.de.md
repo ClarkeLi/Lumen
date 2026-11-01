@@ -42,6 +42,10 @@ Lumen schwebt über allen Fenstern (und in der Menüleiste) und zeigt auf einen 
 
 ## Installation
 
+**Download:** `Lumen-1.0.0-macos-universal.zip` von den [Releases](https://github.com/ClarkeLi/Lumen/releases/latest) laden (Apple Silicon + Intel), entpacken und `Lumen.app` ins Programme-Verzeichnis ziehen. Die App ist nicht notarisiert – beim ersten Start per Rechtsklick → **Öffnen** starten oder `xattr -cr /Applications/Lumen.app` ausführen.
+
+**Oder aus dem Quellcode bauen:**
+
 ```sh
 git clone https://github.com/ClarkeLi/Lumen.git
 cd Lumen

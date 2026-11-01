@@ -42,6 +42,10 @@ Lumen 置顶悬浮在所有窗口之上（同时在菜单栏显示），一眼�
 
 ## 安装
 
+**下载：** 从 [Releases](https://github.com/ClarkeLi/Lumen/releases/latest) 下载 `Lumen-1.0.0-macos-universal.zip`（Apple 芯片 + Intel 通用），解压后把 `Lumen.app` 拖进「应用程序」。应用没有经过公证，首次打开请右键 →「打开」，或执行 `xattr -cr /Applications/Lumen.app`。
+
+**或者从源码构建：**
+
 ```sh
 git clone https://github.com/ClarkeLi/Lumen.git
 cd Lumen
