@@ -349,11 +349,21 @@ enum QuotaFetcher {
     }
 }
 
+/// Statusfarben für Restkontingent (fest, nie themenabhängig): gut / Warnung / kritisch.
+func quotaStatusColor(_ remaining: Double) -> NSColor {
+    if remaining > 40 { return NSColor(srgbRed: 0x0c / 255, green: 0xa3 / 255, blue: 0x0c / 255, alpha: 1) }
+    if remaining > 15 { return NSColor(srgbRed: 0xfa / 255, green: 0xb2 / 255, blue: 0x19 / 255, alpha: 1) }
+    return NSColor(srgbRed: 0xd0 / 255, green: 0x3b / 255, blue: 0x3b / 255, alpha: 1)
+}
+
 // MARK: - Ampel-Darstellung
 
 final class TrafficLightView: NSView {
     /// Höhe des Kontingent-Bereichs unter der Ampel (bei Skalierung 1.0)
-    static let gaugeAreaHeight: CGFloat = 72
+    static let gaugeAreaHeight: CGFloat = 80
+    /// Breite des Fensters mit / ohne Kontingent-Sockel (bei Skalierung 1.0)
+    static let panelWidth: CGFloat = 58
+    static let panelWidthWithQuota: CGFloat = 78
 
     var state: LightState = .off { didSet { needsDisplay = true } }
     var quota: QuotaSnapshot? { didSet { needsDisplay = true } }
@@ -365,7 +375,7 @@ final class TrafficLightView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
     override func rightMouseDown(with event: NSEvent) { onRightClick?(event) }
 
-    private func color(for s: LightState) -> NSColor {
+    func color(for s: LightState) -> NSColor {
         switch s {
         case .red: return NSColor(calibratedRed: 1.0, green: 0.23, blue: 0.19, alpha: 1)
         case .yellow: return NSColor(calibratedRed: 1.0, green: 0.80, blue: 0.0, alpha: 1)
@@ -374,15 +384,11 @@ final class TrafficLightView: NSView {
         }
     }
 
-    private func quotaColor(_ remaining: Double) -> NSColor {
-        remaining > 40 ? color(for: .green) : remaining > 15 ? color(for: .yellow) : color(for: .red)
-    }
-
     /// Zeichnet die Kapsel mit den zwei Restanzeigen (5h / 7d).
     private func drawGauge(in rect: NSRect) {
         let s = uiScale
-        let capsule = NSBezierPath(roundedRect: rect, xRadius: 10 * s, yRadius: 10 * s)
-        NSGradient(starting: NSColor(white: 0.22, alpha: 0.96), ending: NSColor(white: 0.08, alpha: 0.96))?
+        let capsule = NSBezierPath(roundedRect: rect, xRadius: 12 * s, yRadius: 12 * s)
+        NSGradient(starting: NSColor(white: 0.20, alpha: 0.96), ending: NSColor(white: 0.08, alpha: 0.96))?
             .draw(in: capsule, angle: -90)
         NSColor(white: 0.45, alpha: 0.6).setStroke()
         capsule.lineWidth = 1
@@ -391,56 +397,46 @@ final class TrafficLightView: NSView {
         let dim: CGFloat = (quota?.isStale ?? false) ? 0.5 : 1.0
         let rows: [(String, QuotaWindow?)] = [("5h", quota?.fiveHour), ("7d", quota?.sevenDay)]
         let rowH = rect.height / 2
-        let inset = 6 * s
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 8.5 * s, weight: .semibold)
-        let barH = 3.5 * s
-        let small = NSFont.monospacedDigitSystemFont(ofSize: 7.5 * s, weight: .medium)
+        let x = rect.minX + 9 * s
+        let w = rect.width - 18 * s
+        let labelFont = NSFont.systemFont(ofSize: 8 * s, weight: .semibold)
+        let pctFont = NSFont.monospacedDigitSystemFont(ofSize: 12 * s, weight: .bold)
+        let smallFont = NSFont.monospacedDigitSystemFont(ofSize: 7.5 * s, weight: .medium)
+        let barH = 4 * s
+        let gap = 3.5 * s
+
+        func draw(_ str: String, _ font: NSFont, _ alpha: CGFloat, baseline: CGFloat, right: Bool = false) {
+            let a = NSAttributedString(string: str, attributes: [
+                .font: font, .foregroundColor: NSColor(white: 1, alpha: alpha * dim)])
+            a.draw(at: NSPoint(x: right ? x + w - a.size().width : x, y: baseline + font.descender))
+        }
 
         for (i, row) in rows.enumerated() {
-            let rowTop = rect.maxY - rowH * CGFloat(i)
-            let contentH = font.capHeight + 3 * s + barH + 5.5 * s + small.capHeight
-            let contentBottom = rowTop - rowH / 2 - contentH / 2
-            let bottom = contentBottom + small.capHeight + 5.5 * s   // Unterkante des Balkens
-            let x = rect.minX + inset
-            let w = rect.width - inset * 2
+            let contentH = pctFont.capHeight + gap + barH + gap + smallFont.capHeight
+            let top = rect.maxY - rowH * (CGFloat(i) + 0.5) + contentH / 2
+            let line1 = top - pctFont.capHeight
+            let barY = line1 - gap - barH
+            let line3 = barY - gap - smallFont.capHeight
 
-            // Restzeit bis zum Reset
-            let cdText = row.1 == nil ? "" : "↻ " + (row.1?.countdown ?? "…")
-            NSAttributedString(string: cdText, attributes: [
-                .font: small, .foregroundColor: NSColor(white: 1, alpha: 0.5 * dim)])
-                .draw(at: NSPoint(x: x, y: contentBottom - small.descender))
+            draw(row.0, labelFont, 0.62, baseline: line1)
+            let remaining = row.1?.remaining
+            let tint = remaining.map { quotaStatusColor($0) } ?? NSColor(white: 1, alpha: 1)
 
-            // Balken
-            let track = NSRect(x: x, y: bottom, width: w, height: barH)
-            NSColor(white: 1, alpha: 0.12).setFill()
+            // Spur = hellere Stufe derselben Farbe, Füllung = Statusfarbe (dünn, voll gerundet)
+            let track = NSRect(x: x, y: barY, width: w, height: barH)
+            tint.withAlphaComponent(remaining == nil ? 0.12 : 0.22).setFill()
             NSBezierPath(roundedRect: track, xRadius: barH / 2, yRadius: barH / 2).fill()
 
-            let textY = bottom + barH + 3 * s - font.descender
-            let label = NSAttributedString(string: row.0, attributes: [
-                .font: font, .foregroundColor: NSColor(white: 1, alpha: 0.55 * dim)])
-            label.draw(at: NSPoint(x: x, y: textY))
-
             if let win = row.1 {
-                let c = quotaColor(win.remaining).withAlphaComponent(dim)
-                let fill = NSRect(x: x, y: bottom, width: max(barH, w * CGFloat(win.remaining / 100)), height: barH)
                 if win.remaining > 0 {
-                    NSGraphicsContext.saveGraphicsState()
-                    let glow = NSShadow()
-                    glow.shadowColor = c.withAlphaComponent(0.6)
-                    glow.shadowBlurRadius = 3 * s
-                    glow.shadowOffset = .zero
-                    glow.set()
-                    c.setFill()
+                    let fill = NSRect(x: x, y: barY, width: max(barH, w * CGFloat(win.remaining / 100)), height: barH)
+                    tint.withAlphaComponent(dim).setFill()
                     NSBezierPath(roundedRect: fill, xRadius: barH / 2, yRadius: barH / 2).fill()
-                    NSGraphicsContext.restoreGraphicsState()
                 }
-                let pct = NSAttributedString(string: "\(Int(win.remaining.rounded()))%", attributes: [
-                    .font: font, .foregroundColor: NSColor(white: 1, alpha: 0.92 * dim)])
-                pct.draw(at: NSPoint(x: x + w - pct.size().width, y: textY))
+                draw("\(Int(win.remaining.rounded()))%", pctFont, 0.95, baseline: line1, right: true)
+                draw("↻ " + (win.countdown ?? "…"), smallFont, 0.5, baseline: line3)
             } else {
-                let pct = NSAttributedString(string: "--", attributes: [
-                    .font: font, .foregroundColor: NSColor(white: 1, alpha: 0.35)])
-                pct.draw(at: NSPoint(x: x + w - pct.size().width, y: textY))
+                draw("--", pctFont, 0.35, baseline: line1, right: true)
             }
         }
     }
@@ -448,12 +444,16 @@ final class TrafficLightView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let pad: CGFloat = 6   // Platz für den Leuchtschein
         var lightsBounds = bounds
+        var housingW = bounds.width - pad * 2
         if showQuota {
             let gaugeH = Self.gaugeAreaHeight * uiScale
             lightsBounds = NSRect(x: 0, y: gaugeH, width: bounds.width, height: bounds.height - gaugeH)
+            housingW = Self.panelWidth * uiScale - pad * 2
             drawGauge(in: NSRect(x: pad, y: pad, width: bounds.width - pad * 2, height: gaugeH - 4 * uiScale))
         }
-        let body = lightsBounds.insetBy(dx: pad, dy: pad)
+        let inner = lightsBounds.insetBy(dx: 0, dy: pad)
+        let body = NSRect(x: lightsBounds.midX - housingW / 2, y: inner.minY, width: housingW, height: inner.height)
+
         let radius = body.width * 0.32
 
         // Gehäuse
@@ -563,14 +563,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: Schwebendes Fenster
 
     private var baseSize: NSSize {
-        NSSize(width: 58 * scale, height: (150 + (showQuota ? TrafficLightView.gaugeAreaHeight : 0)) * scale)
+        NSSize(width: (showQuota ? TrafficLightView.panelWidthWithQuota : TrafficLightView.panelWidth) * scale,
+               height: (150 + (showQuota ? TrafficLightView.gaugeAreaHeight : 0)) * scale)
     }
 
     /// Fenstergröße anpassen; die Oberkante bleibt an Ort und Stelle.
     private func applyPanelSize() {
         let top = panel.frame.maxY
+        let midX = panel.frame.midX   // Mitte bleibt, wenn sich die Breite ändert
         let size = baseSize
-        panel.setFrame(NSRect(x: panel.frame.minX, y: top - size.height, width: size.width, height: size.height), display: true)
+        panel.setFrame(NSRect(x: midX - size.width / 2, y: top - size.height, width: size.width, height: size.height), display: true)
         lightView.uiScale = scale
         lightView.showQuota = showQuota
     }
@@ -634,7 +636,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             lightView.state = state
             lightView.blinkOn = true
         }
-        statusItem.button?.attributedTitle = statusTitle(state)
+        updateStatusItem(state)
         let minute = Int(Date().timeIntervalSince1970 / 60)
         if minute != lastMinute { lastMinute = minute; lightView.needsDisplay = true }
         statusItem.button?.toolTip = "Claude Code 红绿灯 – " + (monitoringEnabled ? state.label : "已暂停")
@@ -643,18 +645,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshQuotaIfNeeded()
     }
 
-    /// Menüleisten-Titel: Ampel-Emoji + Rest-% und Zeit bis zum Reset je Fenster.
-    private func statusTitle(_ state: LightState) -> NSAttributedString {
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-        guard monitoringEnabled else { return NSAttributedString(string: "⚫️", attributes: [.font: font]) }
-        var text = state.emoji
-        if showQuota, showStatusQuota, let q = quota {
-            for (name, w) in [("5h", q.fiveHour), ("7d", q.sevenDay)] {
-                guard let w else { continue }
-                text += " \(name) \(Int(w.remaining.rounded()))%·\(w.countdown ?? "…")"
-            }
+    private var statusKey = ""
+
+    /// Menüleiste: Ampelpunkt + zwei Zeilen (5h oben, 7d unten) mit Balken, Rest-% und Zeit bis zum Reset.
+    private func updateStatusItem(_ state: LightState) {
+        guard let button = statusItem.button else { return }
+        let rows: [(String, QuotaWindow)] = monitoringEnabled && showQuota && showStatusQuota
+            ? [("5h", quota?.fiveHour), ("7d", quota?.sevenDay)].compactMap { n, w in w.map { (n, $0) } } : []
+        let key = "\(monitoringEnabled)|\(state)|" + rows.map { "\($0.0)\(Int($0.1.remaining.rounded()))\($0.1.countdown ?? "…")" }.joined(separator: "|")
+        guard key != statusKey else { return }
+        statusKey = key
+
+        guard !rows.isEmpty else {   // klassisch: nur Emoji
+            button.image = nil
+            button.imagePosition = .noImage
+            button.attributedTitle = NSAttributedString(string: monitoringEnabled ? state.emoji : "⚫️",
+                                                        attributes: [.font: NSFont.systemFont(ofSize: 13)])
+            return
         }
-        return NSAttributedString(string: text, attributes: [.font: font])
+        button.title = ""
+        button.imagePosition = .imageOnly
+        button.image = statusImage(lamp: lightView.color(for: state), lit: state != .off, rows: rows)
+    }
+
+    private func statusImage(lamp: NSColor, lit: Bool, rows: [(String, QuotaWindow)]) -> NSImage {
+        let h: CGFloat = 22, lampD: CGFloat = 10
+        let labelFont = NSFont.systemFont(ofSize: 7.5, weight: .semibold)
+        let pctFont = NSFont.monospacedDigitSystemFont(ofSize: 8.5, weight: .bold)
+        let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 7.5, weight: .medium)
+        let labelW: CGFloat = 11, barW: CGFloat = 34, barH: CGFloat = 3.5, pctW: CGFloat = 23, timeW: CGFloat = 29
+        let x0: CGFloat = 4 + lampD + 6
+        let width = x0 + labelW + barW + 4 + pctW + 3 + timeW + 3
+
+        return NSImage(size: NSSize(width: width, height: h), flipped: false) { _ in
+            // Ampelpunkt
+            let dot = NSRect(x: 4, y: (h - lampD) / 2, width: lampD, height: lampD)
+            NSGraphicsContext.saveGraphicsState()
+            if lit {
+                let g = NSShadow(); g.shadowColor = lamp.withAlphaComponent(0.8); g.shadowBlurRadius = 3; g.shadowOffset = .zero; g.set()
+            }
+            (lit ? lamp : NSColor.secondaryLabelColor).setFill()
+            NSBezierPath(ovalIn: dot).fill()
+            NSGraphicsContext.restoreGraphicsState()
+
+            func text(_ str: String, _ font: NSFont, _ color: NSColor, x: CGFloat, baseline: CGFloat, width: CGFloat = 0, right: Bool = false) {
+                let a = NSAttributedString(string: str, attributes: [.font: font, .foregroundColor: color])
+                a.draw(at: NSPoint(x: right ? x + width - a.size().width : x, y: baseline + font.descender))
+            }
+            for (i, row) in rows.enumerated() {
+                let mid = h / 2 + (i == 0 ? 5.5 : -5.5)
+                let base = mid - pctFont.capHeight / 2
+                let tint = quotaStatusColor(row.1.remaining)
+                text(row.0, labelFont, .secondaryLabelColor, x: x0, baseline: mid - labelFont.capHeight / 2)
+
+                let bar = NSRect(x: x0 + labelW, y: mid - barH / 2, width: barW, height: barH)
+                tint.withAlphaComponent(0.25).setFill()
+                NSBezierPath(roundedRect: bar, xRadius: barH / 2, yRadius: barH / 2).fill()
+                if row.1.remaining > 0 {
+                    var f = bar; f.size.width = max(barH, barW * CGFloat(row.1.remaining / 100))
+                    tint.setFill()
+                    NSBezierPath(roundedRect: f, xRadius: barH / 2, yRadius: barH / 2).fill()
+                }
+                let px = x0 + labelW + barW + 4
+                text("\(Int(row.1.remaining.rounded()))%", pctFont, .labelColor, x: px, baseline: base, width: pctW, right: true)
+                text(row.1.countdown ?? "…", timeFont, .secondaryLabelColor, x: px + pctW + 3, baseline: mid - timeFont.capHeight / 2, width: timeW, right: true)
+            }
+            return true
+        }
     }
 
     private func refreshQuotaIfNeeded() {

@@ -27,7 +27,10 @@ Lumen schwebt über allen Fenstern (und in der Menüleiste) und zeigt auf einen 
 - **Vier Zustände**, gesteuert über Claude-Code-Hooks – kein Auslesen der Terminalausgabe
 - **Mehrere Sessions**: Bei mehreren laufenden Sessions gewinnt die dringendste (🟡 > 🔴 > 🟢)
 - **Kontingent-Anzeige**: verbleibende Prozent für das 5h- und 7d-Fenster, farbige Balken und ein Live-Countdown bis zum nächsten Reset
-- **Menüleisten-Anzeige**: z. B. `🟢 5h 94%·2h14m 7d 37%·4d3h` – verbleibendes Kontingent und Zeit bis zum Reset immer im Blick
+- **Menüleisten-Anzeige**: zwei Zeilen (5h oben, 7d unten) mit Balken, verbleibenden Prozent und Zeit bis zum Reset – immer im Blick
+
+<p align="center"><img src="docs/menubar.png" alt="Menüleisten-Anzeige (dunkel / hell)" width="360"></p>
+
 - Drei Größen, Start bei der Anmeldung, Hooks mit einem Klick entfernen, keine Abhängigkeiten
 
 | Licht | Bedeutung | Ausgelöst durch |
@@ -59,7 +62,7 @@ Beim ersten Start trägt Lumen seine Hooks in `~/.claude/settings.json` ein (das
 Angezeigt wird, was **übrig** ist – nicht, was verbraucht wurde:
 
 - Balkenfarbe: > 40 % grün, 15–40 % gelb, < 15 % rot. `--` heißt: noch keine Daten; Werte, die älter als 10 Minuten sind, werden abgedunkelt
-- `↻ 2h14m` unter jedem Balken ist die Zeit bis zum Reset des Fensters; dieselben Werte stehen in der Menüleiste (`5h 94%·2h14m`). Mit dem Mauszeiger über der Ampel oder im Menü siehst du den genauen Zeitpunkt
+- `↻ 2h14m` unter jedem Balken ist die Zeit bis zum Reset des Fensters; dieselben Werte stehen in der Menüleiste (zwei Balken). Mit dem Mauszeiger über der Ampel oder im Menü siehst du den genauen Zeitpunkt
 - Sobald ein Fenster zurückgesetzt wird, aktualisiert Lumen die Werte sofort
 - Die Menüleisten-Anzeige lässt sich im Menü separat ausschalten
 - **Datenquelle:** Alle 3 Minuten liest Lumen das OAuth-Token von Claude Code aus dem macOS-Schlüsselbund (`Claude Code-credentials`) und ruft `api.anthropic.com/api/oauth/usage` auf. Das ist ein **nicht dokumentierter Endpunkt**, der sich jederzeit ändern oder wegfallen kann. Das Token wird nur für diese Anfrage verwendet und nie gespeichert

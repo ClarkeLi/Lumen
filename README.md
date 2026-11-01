@@ -27,7 +27,10 @@ Lumen sits on top of your windows (and in the menu bar) and tells you at a glanc
 - **Four states** driven by Claude Code hooks – no polling of terminal output
 - **Multi-session aware** – with several sessions running, the most urgent one wins (🟡 > 🔴 > 🟢)
 - **Quota gauge** – remaining % for the 5h and 7d windows with colour-coded bars and a live countdown to the next reset
-- **Menu bar readout** – e.g. `🟢 5h 94%·2h14m 7d 37%·4d3h`: remaining quota and time until reset, always visible
+- **Menu bar readout** – two rows (5h on top, 7d below), each with a bar, remaining % and time until reset, always visible
+
+<p align="center"><img src="docs/menubar.png" alt="Menu bar readout in dark and light" width="360"></p>
+
 - Three sizes, launch at login, one-click hook uninstall, zero dependencies
 
 | Light | Meaning | Triggered by |
@@ -59,7 +62,7 @@ On first launch Lumen writes its hooks into `~/.claude/settings.json` (the origi
 The gauge shows what is **left**, not what is used:
 
 - Bar colour: > 40 % green, 15–40 % yellow, < 15 % red. `--` means no data yet; values older than 10 minutes are dimmed
-- `↻ 2h14m` under each bar is the time until that window resets; the same numbers appear in the menu bar (`5h 94%·2h14m`). Hover the light or open the menu for the exact reset time
+- `↻ 2h14m` under each bar is the time until that window resets; the same numbers appear in the menu bar (two bars). Hover the light or open the menu for the exact reset time
 - When a window resets, Lumen refreshes the numbers right away
 - The menu bar readout can be turned off separately in the menu
 - **Data source:** every 3 minutes Lumen reads Claude Code's OAuth token from the macOS Keychain (`Claude Code-credentials`) and calls `api.anthropic.com/api/oauth/usage`. This is an **undocumented endpoint** and may change or stop working at any time. The token is used only for this request and never stored
