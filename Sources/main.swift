@@ -15,6 +15,50 @@ import AppKit
 import Darwin
 import ServiceManagement
 
+// MARK: - Lokalisierung (zh / en / de, folgt der Systemsprache)
+
+enum Lang: String { case zh, en, de }
+
+enum I18n {
+    private(set) static var lang: Lang = detect()
+
+    /// Erste unterstützte Sprache aus den Systemeinstellungen; sonst Englisch.
+    static func detect() -> Lang {
+        CFPreferencesAppSynchronize(kCFPreferencesAnyApplication)
+        let prefs = CFPreferencesCopyValue("AppleLanguages" as CFString, kCFPreferencesAnyApplication,
+                                           kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? [String]
+            ?? Locale.preferredLanguages
+        for id in prefs {
+            let code = id.lowercased()
+            if code.hasPrefix("zh") { return .zh }
+            if code.hasPrefix("de") { return .de }
+            if code.hasPrefix("en") { return .en }
+        }
+        return .en
+    }
+
+    /// Liest die Systemsprache neu ein; true, wenn sie sich geändert hat.
+    @discardableResult
+    static func refresh() -> Bool {
+        let new = detect()
+        defer { lang = new }
+        return new != lang
+    }
+
+    static var locale: Locale {
+        Locale(identifier: lang == .zh ? "zh_CN" : lang.rawValue)
+    }
+}
+
+/// Wählt den Text passend zur aktuellen Sprache.
+func tr(_ zh: String, _ en: String, _ de: String) -> String {
+    switch I18n.lang {
+    case .zh: return zh
+    case .en: return en
+    case .de: return de
+    }
+}
+
 // MARK: - Gemeinsame Definitionen
 
 enum LightState: String, Codable {
@@ -31,10 +75,10 @@ enum LightState: String, Codable {
 
     var label: String {
         switch self {
-        case .red: return "工作中"
-        case .yellow: return "需要你介入"
-        case .green: return "等待输入"
-        case .off: return "未检测到 Claude Code"
+        case .red: return tr("工作中", "Working", "Arbeitet")
+        case .yellow: return tr("需要你介入", "Needs your attention", "Braucht dein Eingreifen")
+        case .green: return tr("等待输入", "Waiting for input", "Wartet auf Eingabe")
+        case .off: return tr("未检测到 Claude Code", "Claude Code not detected", "Claude Code nicht erkannt")
         }
     }
 
@@ -543,7 +587,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         try? FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
-        do { try HookInstaller.install() } catch { showError("安装 Claude Code hooks 失败", error) }
+        do { try HookInstaller.install() } catch { showError(tr("安装 Claude Code hooks 失败", "Failed to install Claude Code hooks", "Installation der Claude-Code-Hooks fehlgeschlagen"), error) }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let menu = NSMenu()
@@ -628,7 +672,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Zustand aktualisieren
 
+    private var langTicks = 0
+
     private func tick() {
+        langTicks += 1
+        if langTicks % 4 == 0, I18n.refresh() { lightView.needsDisplay = true }
         monitor.refresh()
         let state = monitoringEnabled ? monitor.aggregate : .off
         if lightView.state != state {
@@ -638,7 +686,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateStatusItem(state)
         let minute = Int(Date().timeIntervalSince1970 / 60)
         if minute != lastMinute { lastMinute = minute; lightView.needsDisplay = true }
-        statusItem.button?.toolTip = "Claude Code 红绿灯 – " + (monitoringEnabled ? state.label : "已暂停")
+        statusItem.button?.toolTip = "Claude Code – " + (monitoringEnabled ? state.label : tr("已暂停", "Paused", "Pausiert"))
         lightView.toolTip = tooltipText()
         updatePanelVisibility()
         refreshQuotaIfNeeded()
@@ -651,7 +699,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         let rows: [(String, QuotaWindow)] = monitoringEnabled && showQuota && showStatusQuota
             ? [("5h", quota?.fiveHour), ("7d", quota?.sevenDay)].compactMap { n, w in w.map { (n, $0) } } : []
-        let key = "\(monitoringEnabled)|\(state)|" + rows.map { "\($0.0)\(Int($0.1.remaining.rounded()))\($0.1.countdown ?? "…")" }.joined(separator: "|")
+        let key = "\(I18n.lang)|\(monitoringEnabled)|\(state)|" + rows.map { "\($0.0)\(Int($0.1.remaining.rounded()))\($0.1.countdown ?? "…")" }.joined(separator: "|")
         guard key != statusKey else { return }
         statusKey = key
 
@@ -735,25 +783,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func quotaLine(_ name: String, _ w: QuotaWindow?, resetFormat: String) -> String? {
+    private func quotaLine(_ name: String, _ w: QuotaWindow?, resetTemplate: String) -> String? {
         guard let w else { return nil }
-        var line = "\(name) 剩余 \(Int(w.remaining.rounded()))%"
+        let pct = Int(w.remaining.rounded())
+        var line = tr("\(name) 剩余 \(pct)%", "\(name): \(pct)% left", "\(name): noch \(pct)%")
         if let r = w.resetsAt {
             let f = DateFormatter()
-            f.dateFormat = resetFormat
-            line += "  ·  " + (w.countdown.map { "\($0) 后重置（\(f.string(from: r))）" } ?? "即将重置")
+            f.locale = I18n.locale
+            f.setLocalizedDateFormatFromTemplate(resetTemplate)
+            let at = f.string(from: r)
+            line += "  ·  " + (w.countdown.map {
+                tr("\($0) 后重置（\(at)）", "resets in \($0) (\(at))", "Reset in \($0) (\(at))")
+            } ?? tr("即将重置", "resetting soon", "Reset gleich"))
         }
         return line
     }
 
     private var quotaLines: [String] {
         guard showQuota, let q = quota else { return [] }
-        return [quotaLine("5 小时", q.fiveHour, resetFormat: "HH:mm"),
-                quotaLine("7 天", q.sevenDay, resetFormat: "M月d日 HH:mm")].compactMap { $0 }
+        return [quotaLine(tr("5 小时", "5-hour", "5 Std."), q.fiveHour, resetTemplate: "HHmm"),
+                quotaLine(tr("7 天", "7-day", "7 Tage"), q.sevenDay, resetTemplate: "MMMdHHmm")].compactMap { $0 }
     }
 
     private func tooltipText() -> String {
-        guard monitoringEnabled else { return "已暂停" }
+        guard monitoringEnabled else { return tr("已暂停", "Paused", "Pausiert") }
         var lines = monitor.sessions.isEmpty
             ? [LightState.off.label]
             : monitor.sessions.map { "\($0.state.emoji) \(projectName($0.cwd)) – \($0.state.label)" }
@@ -762,16 +815,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func projectName(_ cwd: String) -> String {
-        cwd.isEmpty ? "未知目录" : (cwd as NSString).lastPathComponent
+        cwd.isEmpty ? tr("未知目录", "Unknown folder", "Unbekannter Ordner") : (cwd as NSString).lastPathComponent
     }
 
     // MARK: Menü
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        I18n.refresh()
         let state = monitoringEnabled ? monitor.aggregate : .off
 
-        let header = NSMenuItem(title: monitoringEnabled ? "\(state.emoji)  \(state.label)" : "⚫️  监控已暂停", action: nil, keyEquivalent: "")
+        let header = NSMenuItem(title: monitoringEnabled ? "\(state.emoji)  \(state.label)" : "⚫️  " + tr("监控已暂停", "Monitoring paused", "Überwachung pausiert"), action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
 
@@ -796,29 +850,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        addItem(menu, monitoringEnabled ? "关闭红绿灯（暂停监控）" : "开启红绿灯", #selector(toggleEnabled), "e")
-        addItem(menu, "显示悬浮红绿灯", #selector(toggleVisible), "", checked: lightVisible).isEnabled = monitoringEnabled
+        addItem(menu, monitoringEnabled ? tr("关闭红绿灯（暂停监控）", "Turn Off Light (Pause Monitoring)", "Ampel ausschalten (Überwachung pausieren)") : tr("开启红绿灯", "Turn On Light", "Ampel einschalten"), #selector(toggleEnabled), "e")
+        addItem(menu, tr("显示悬浮红绿灯", "Show Floating Light", "Schwebende Ampel anzeigen"), #selector(toggleVisible), "", checked: lightVisible).isEnabled = monitoringEnabled
 
-        addItem(menu, "显示额度（5h / 7d 剩余）", #selector(toggleQuota), "", checked: showQuota)
-        addItem(menu, "在菜单栏显示额度和重置时间", #selector(toggleStatusQuota), "", checked: showStatusQuota).isEnabled = showQuota
-        let sizeItem = NSMenuItem(title: "大小", action: nil, keyEquivalent: "")
+        addItem(menu, tr("显示额度（5h / 7d 剩余）", "Show Quota (5h / 7d remaining)", "Kontingent anzeigen (5h / 7d verbleibend)"), #selector(toggleQuota), "", checked: showQuota)
+        addItem(menu, tr("在菜单栏显示额度和重置时间", "Show Quota and Reset Time in Menu Bar", "Kontingent und Reset-Zeit in der Menüleiste"), #selector(toggleStatusQuota), "", checked: showStatusQuota).isEnabled = showQuota
+        let sizeItem = NSMenuItem(title: tr("大小", "Size", "Größe"), action: nil, keyEquivalent: "")
         let sizeMenu = NSMenu()
-        for (title, value) in [("小", 0.75), ("中", 1.0), ("大", 1.35)] {
+        for (title, value) in [(tr("小", "Small", "Klein"), 0.75), (tr("中", "Medium", "Mittel"), 1.0), (tr("大", "Large", "Groß"), 1.35)] {
             let it = addItem(sizeMenu, title, #selector(setSize(_:)), "", checked: abs(Double(scale) - value) < 0.01)
             it.representedObject = value
         }
         sizeItem.submenu = sizeMenu
         menu.addItem(sizeItem)
-        addItem(menu, "重置位置", #selector(resetPosition), "")
+        addItem(menu, tr("重置位置", "Reset Position", "Position zurücksetzen"), #selector(resetPosition), "")
 
         menu.addItem(.separator())
-        addItem(menu, "开机自动启动", #selector(toggleLogin), "", checked: SMAppService.mainApp.status == .enabled)
+        addItem(menu, tr("开机自动启动", "Launch at Login", "Beim Anmelden starten"), #selector(toggleLogin), "", checked: SMAppService.mainApp.status == .enabled)
         let installed = HookInstaller.isInstalled()
-        addItem(menu, installed ? "Claude Code hooks：已安装 ✓" : "安装 Claude Code hooks", #selector(installHooks), "").isEnabled = !installed
-        addItem(menu, "卸载 hooks 并退出", #selector(uninstallAndQuit), "")
+        addItem(menu, installed ? tr("Claude Code hooks：已安装 ✓", "Claude Code hooks: installed ✓", "Claude-Code-Hooks: installiert ✓") : tr("安装 Claude Code hooks", "Install Claude Code hooks", "Claude-Code-Hooks installieren"), #selector(installHooks), "").isEnabled = !installed
+        addItem(menu, tr("卸载 hooks 并退出", "Uninstall Hooks and Quit", "Hooks entfernen und beenden"), #selector(uninstallAndQuit), "")
 
         menu.addItem(.separator())
-        addItem(menu, "退出", #selector(quit), "q")
+        addItem(menu, tr("退出", "Quit", "Beenden"), #selector(quit), "q")
     }
 
     @discardableResult
@@ -858,15 +912,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         do {
             if SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() }
             else { try SMAppService.mainApp.register() }
-        } catch { showError("设置开机启动失败", error) }
+        } catch { showError(tr("设置开机启动失败", "Failed to change launch at login", "Autostart konnte nicht geändert werden"), error) }
     }
 
     @objc private func installHooks() {
-        do { try HookInstaller.install() } catch { showError("安装 hooks 失败", error) }
+        do { try HookInstaller.install() } catch { showError(tr("安装 hooks 失败", "Failed to install hooks", "Hooks konnten nicht installiert werden"), error) }
     }
 
     @objc private func uninstallAndQuit() {
-        do { try HookInstaller.uninstall() } catch { showError("卸载 hooks 失败", error); return }
+        do { try HookInstaller.uninstall() } catch { showError(tr("卸载 hooks 失败", "Failed to uninstall hooks", "Hooks konnten nicht entfernt werden"), error); return }
         try? FileManager.default.removeItem(at: sessionsDir)
         NSApp.terminate(nil)
     }

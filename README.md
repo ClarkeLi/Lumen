@@ -31,6 +31,7 @@ Lumen sits on top of your windows (and in the menu bar) and tells you at a glanc
 
 <p align="center"><img src="docs/menubar.png" alt="Menu bar readout in dark and light" width="360"></p>
 
+- **Localized UI** – English, 简体中文 and Deutsch; follows the system language automatically, including changes while running (other languages fall back to English)
 - Three sizes, launch at login, one-click hook uninstall, zero dependencies
 
 | Light | Meaning | Triggered by |

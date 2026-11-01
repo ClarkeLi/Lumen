@@ -31,6 +31,7 @@ Lumen schwebt über allen Fenstern (und in der Menüleiste) und zeigt auf einen 
 
 <p align="center"><img src="docs/menubar.png" alt="Menüleisten-Anzeige (dunkel / hell)" width="360"></p>
 
+- **Mehrsprachige Oberfläche**: English, 简体中文 und Deutsch; folgt automatisch der Systemsprache, auch bei Änderungen im laufenden Betrieb (andere Sprachen fallen auf Englisch zurück)
 - Drei Größen, Start bei der Anmeldung, Hooks mit einem Klick entfernen, keine Abhängigkeiten
 
 | Licht | Bedeutung | Ausgelöst durch |
