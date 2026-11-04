@@ -24,8 +24,9 @@ Lumen schwebt über allen Fenstern (und in der Menüleiste) und zeigt auf einen 
 ## Funktionen
 
 - **Immer sichtbare Ampel** + Menüleisten-Symbol, verschiebbar, Position wird gespeichert
-- **Vier Zustände**, gesteuert über Claude-Code-Hooks – kein Auslesen der Terminalausgabe
-- **Mehrere Sessions**: Bei mehreren laufenden Sessions gewinnt die dringendste (🟡 > 🔴 > 🟢)
+- **Fünf Zustände**, gesteuert über Claude-Code-Hooks und das Session-Transkript – kein Auslesen der Terminalausgabe
+- **Hintergrundaufgaben**: Beendet Claude seinen Zug, während noch ein Bash-Befehl im Hintergrund, ein `Monitor` oder ein Hintergrund-Agent läuft, bleibt die rote Lampe an und ein blauer Ring „atmet“ ums Gehäuse, statt eines irreführenden 🟢; Tooltip und Menü zeigen, was läuft (z. B. `Shell ×2 · Monitor ×1`)
+- **Mehrere Sessions**: Bei mehreren laufenden Sessions gewinnt die dringendste (🟡 > 🔴 > 🔴+blauer Ring > 🟢)
 - **Kontingent-Anzeige**: verbleibende Prozent für das 5h- und 7d-Fenster, farbige Balken und ein Live-Countdown bis zum nächsten Reset
 - **Menüleisten-Anzeige**: zwei Zeilen (5h oben, 7d unten) mit Balken, verbleibenden Prozent und Zeit bis zum Reset – immer im Blick
 
@@ -37,6 +38,7 @@ Lumen schwebt über allen Fenstern (und in der Menüleiste) und zeigt auf einen 
 | Licht | Bedeutung | Ausgelöst durch |
 |---|---|---|
 | 🔴 | Arbeitet | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` |
+| 🔴 + blauer Ring (atmet) | Zug beendet, aber Hintergrundaufgaben (Bash `run_in_background`, `Monitor`, Hintergrund-Agents) laufen noch – Claude macht danach weiter | `Stop` + unfertige Hintergrundaufgaben im Transkript |
 | 🟡 (blinkt) | Braucht dich | `PermissionRequest`, Berechtigungs-Hinweise, `AskUserQuestion`, `ExitPlanMode` |
 | 🟢 | Fertig, wartet auf Eingabe | `Stop`, `SessionStart`, Abbruch durch den Nutzer (Esc) |
 | ⚪️ | Kein Claude Code aktiv | – |

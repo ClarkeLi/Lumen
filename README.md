@@ -24,8 +24,9 @@ Lumen sits on top of your windows (and in the menu bar) and tells you at a glanc
 ## Features
 
 - **Always-on-top traffic light** + menu bar icon, draggable, position is remembered
-- **Four states** driven by Claude Code hooks – no polling of terminal output
-- **Multi-session aware** – with several sessions running, the most urgent one wins (🟡 > 🔴 > 🟢)
+- **Five states** driven by Claude Code hooks and the session transcript – no polling of terminal output
+- **Background-task aware** – when Claude ends its turn but a background Bash command, `Monitor` or background agent is still running, the light shows a red light with a breathing blue ring instead of a misleading 🟢; the tooltip and menu say what is running (e.g. `Shell ×2 · Monitor ×1`)
+- **Multi-session aware** – with several sessions running, the most urgent one wins (🟡 > 🔴 > 🔴+🔵 ring > 🟢)
 - **Quota gauge** – remaining % for the 5h and 7d windows with colour-coded bars and a live countdown to the next reset
 - **Menu bar readout** – two rows (5h on top, 7d below), each with a bar, remaining % and time until reset, always visible
 
@@ -37,6 +38,7 @@ Lumen sits on top of your windows (and in the menu bar) and tells you at a glanc
 | Light | Meaning | Triggered by |
 |---|---|---|
 | 🔴 | Working | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` |
+| 🔴 + blue ring (breathing) | Turn finished, but background tasks (Bash `run_in_background`, `Monitor`, background agents) are still running – Claude will resume when they finish | `Stop` + unfinished background tasks found in the transcript |
 | 🟡 (blinking) | Needs you | `PermissionRequest`, permission notifications, `AskUserQuestion`, `ExitPlanMode` |
 | 🟢 | Done, waiting for input | `Stop`, `SessionStart`, user interrupt (Esc) |
 | ⚪️ | No Claude Code running | – |

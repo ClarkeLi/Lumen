@@ -24,8 +24,9 @@ Lumen 置顶悬浮在所有窗口之上（同时在菜单栏显示），一眼�
 ## 特性
 
 - **置顶红绿灯** + 菜单栏图标，可拖动，自动记住位置
-- **四种状态**由 Claude Code hooks 驱动，无需轮询终端输出
-- **多会话感知**：同时运行多个会话时，取最紧急的一个（🟡 > 🔴 > 🟢）
+- **五种状态**由 Claude Code hooks 和会话 transcript 驱动，无需轮询终端输出
+- **感知后台任务**：Claude 本轮结束、但后台 Bash、`Monitor` 或后台 Agent 仍在运行时，红灯保持亮起并套一圈呼吸的蓝环，而不是容易误导的 🟢；悬停提示和菜单会说明在跑什么（如 `Shell ×2 · Monitor ×1`）
+- **多会话感知**：同时运行多个会话时，取最紧急的一个（🟡 > 🔴 > 🔴+蓝环 > 🟢）
 - **额度仪表**：5h / 7d 窗口的剩余百分比，进度条按剩余量变色，并实时倒计时距离下次刷新还有多久
 - **菜单栏读数**：上下两行（5h 在上，7d 在下），每行有进度条、剩余百分比和刷新倒计时，随时可见
 
@@ -37,6 +38,7 @@ Lumen 置顶悬浮在所有窗口之上（同时在菜单栏显示），一眼�
 | 灯 | 含义 | 触发 |
 |---|---|---|
 | 🔴 | 工作中 | `UserPromptSubmit`、`PreToolUse`、`PostToolUse` |
+| 🔴 + 蓝环（呼吸） | 本轮已结束，但后台任务（Bash `run_in_background`、`Monitor`、后台 Agent）仍在运行，完成后 Claude 会继续 | `Stop` + transcript 中存在未完成的后台任务 |
 | 🟡（闪烁） | 需要人介入 | `PermissionRequest`、权限通知、`AskUserQuestion`、`ExitPlanMode` |
 | 🟢 | 任务停止，等待输入 | `Stop`、`SessionStart`、用户按 Esc 中断 |
 | ⚪️ | 没有运行中的 Claude Code | – |

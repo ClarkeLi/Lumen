@@ -7,6 +7,7 @@
 //   3. Die laufende App liest diese Dateien und zeigt den Gesamtstatus an.
 //
 //   🔴 rot   = arbeitet
+//   🔴 + blauer Ring = Zug beendet, aber Hintergrundaufgaben (Bash/Monitor/Agent) laufen noch
 //   🟡 gelb  = braucht menschliches Eingreifen (Berechtigung, Plan, Auswahlfrage …)
 //   🟢 grün  = Aufgabe beendet, wartet auf neue Eingabe
 //   ⚪️ grau  = keine aktive Claude-Code-Session
@@ -62,13 +63,14 @@ func tr(_ zh: String, _ en: String, _ de: String) -> String {
 // MARK: - Gemeinsame Definitionen
 
 enum LightState: String, Codable {
-    case red, yellow, green, off
+    case red, yellow, green, background, off
 
     var emoji: String {
         switch self {
         case .red: return "🔴"
         case .yellow: return "🟡"
         case .green: return "🟢"
+        case .background: return "🔵"
         case .off: return "⚪️"
         }
     }
@@ -78,15 +80,17 @@ enum LightState: String, Codable {
         case .red: return tr("工作中", "Working", "Arbeitet")
         case .yellow: return tr("需要你介入", "Needs your attention", "Braucht dein Eingreifen")
         case .green: return tr("等待输入", "Waiting for input", "Wartet auf Eingabe")
+        case .background: return tr("后台任务运行中", "Background tasks running", "Hintergrundaufgaben laufen")
         case .off: return tr("未检测到 Claude Code", "Claude Code not detected", "Claude Code nicht erkannt")
         }
     }
 
-    // Priorität bei mehreren Sessions: gelb > rot > grün
+    // Priorität bei mehreren Sessions: gelb > rot > blau > grün
     var priority: Int {
         switch self {
-        case .yellow: return 3
-        case .red: return 2
+        case .yellow: return 4
+        case .red: return 3
+        case .background: return 2
         case .green: return 1
         case .off: return 0
         }
@@ -266,10 +270,147 @@ enum HookInstaller {
     }
 }
 
+// MARK: - Hintergrundaufgaben (aus dem Transkript)
+
+/// Eine von Claude Code im Hintergrund gestartete Aufgabe (Bash mit run_in_background, Monitor, Agent).
+struct BGTask {
+    enum Kind: String { case shell = "Shell", monitor = "Monitor", agent = "Agent" }
+    var kind: Kind
+    var title: String
+    var started: Date
+    var deadline: Date?   // Monitor laufen höchstens bis zum Timeout
+}
+
+/// Liest das Transkript einer Session inkrementell und führt Buch über laufende Hintergrundaufgaben.
+/// Der Stop-Hook feuert auch dann, wenn solche Aufgaben noch laufen – nur das Transkript verrät es:
+/// Start = tool_result mit backgroundTaskId / taskId / agentId, Ende = <task-notification> mit Status.
+final class TranscriptScanner {
+    private var pending: [String: BGTask] = [:]
+    /// Zeitpunkt der letzten Benachrichtigung (Ende/Ereignis) – sie weckt das Modell wieder auf.
+    private(set) var lastNotice: Double = 0
+    private var path = ""
+    private var offset: UInt64 = 0
+    private var carry = Data()
+    private var launches: [String: (kind: BGTask.Kind, title: String)] = [:]   // tool_use_id → Start
+
+    private static let markers = ["run_in_background", "\"Monitor\"", "TaskStop", "backgroundTaskId",
+                                  "\"taskId\"", "\"isAsync\"", "<task-notification>"].map { Data($0.utf8) }
+    private static let isoFrac: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
+    }()
+
+    private func reset() {
+        pending = [:]; lastNotice = 0; offset = 0; carry = Data(); launches = [:]
+    }
+
+    func update(path newPath: String) {
+        if newPath != path { reset(); path = newPath }
+        guard !path.isEmpty, let fh = FileHandle(forReadingAtPath: path) else { return }
+        defer { try? fh.close() }
+        let size = (try? fh.seekToEnd()) ?? 0
+        if size < offset { reset() }
+        guard size > offset else { return }
+        var start = offset
+        let maxRead: UInt64 = 64 << 20
+        if size - start > maxRead { start = size - maxRead; carry = Data() }
+        try? fh.seek(toOffset: start)
+        guard let data = try? fh.readToEnd(), !data.isEmpty else { return }
+        offset = start + UInt64(data.count)
+
+        var buf = carry; buf.append(data)
+        var lines = buf.split(separator: 0x0A, omittingEmptySubsequences: true).map { Data($0) }
+        carry = Data()
+        if buf.last != 0x0A, let last = lines.popLast() { carry = last }   // unvollständige Zeile später
+        for line in lines where Self.markers.contains(where: { line.range(of: $0) != nil }) {
+            if let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] { handle(obj) }
+        }
+    }
+
+    /// Noch laufende Aufgaben (abgelaufene Monitore und > 24 h alte Einträge werden verworfen).
+    func active() -> [BGTask] {
+        let now = Date()
+        pending = pending.filter { _, t in
+            (t.deadline.map { $0 > now } ?? true) && now.timeIntervalSince(t.started) < 86400
+        }
+        return pending.values.sorted { $0.started < $1.started }
+    }
+
+    private func handle(_ obj: [String: Any]) {
+        let ts = (obj["timestamp"] as? String).flatMap { Self.isoFrac.date(from: $0) } ?? Date()
+        let msg = obj["message"] as? [String: Any]
+        let blocks = msg?["content"] as? [[String: Any]] ?? []
+
+        switch obj["type"] as? String {
+        case "assistant":
+            for b in blocks where b["type"] as? String == "tool_use" {
+                let name = b["name"] as? String ?? ""
+                let input = b["input"] as? [String: Any] ?? [:]
+                if name == "TaskStop", let id = input["task_id"] as? String { pending.removeValue(forKey: id) }
+                let bg = input["run_in_background"] as? Bool == true || input["run_in_background"] as? String == "true"
+                guard let tuid = b["id"] as? String, bg || name == "Monitor" else { continue }
+                let kind: BGTask.Kind = name == "Monitor" ? .monitor : (name == "Agent" || name == "Task" ? .agent : .shell)
+                let raw = (input["description"] as? String) ?? (input["command"] as? String) ?? name
+                launches[tuid] = (kind, String(raw.prefix(60)))
+            }
+        case "user":
+            if let r = obj["toolUseResult"] as? [String: Any] {
+                let tuid = blocks.first { $0["type"] as? String == "tool_result" }?["tool_use_id"] as? String
+                let launch = tuid.flatMap { launches[$0] }
+                if let id = r["backgroundTaskId"] as? String {
+                    add(id, launch?.kind ?? .shell, launch?.title, ts, nil)
+                } else if let id = r["taskId"] as? String {
+                    var deadline: Date? = nil
+                    if r["persistent"] as? Bool != true, let ms = (r["timeoutMs"] as? NSNumber)?.doubleValue {
+                        deadline = ts.addingTimeInterval(ms / 1000 + 30)
+                    }
+                    add(id, .monitor, launch?.title, ts, deadline)
+                } else if let id = r["agentId"] as? String, r["isAsync"] as? Bool == true {
+                    add(id, .agent, launch?.title ?? r["description"] as? String, ts, nil)
+                }
+            }
+            if let text = msg?["content"] as? String { notice(text, ts) }
+        case "queue-operation":
+            if let text = obj["content"] as? String { notice(text, ts) }
+        case "attachment":
+            if let text = (obj["attachment"] as? [String: Any])?["prompt"] as? String { notice(text, ts) }
+        default:
+            break
+        }
+    }
+
+    private func add(_ id: String, _ kind: BGTask.Kind, _ title: String?, _ ts: Date, _ deadline: Date?) {
+        pending[id] = BGTask(kind: kind, title: title ?? kind.rawValue, started: ts, deadline: deadline)
+    }
+
+    private func tags(_ tag: String, in text: String) -> [String] {
+        var out: [String] = []
+        var rest = text[...]
+        while let a = rest.range(of: "<\(tag)>"), let b = rest.range(of: "</\(tag)>", range: a.upperBound..<rest.endIndex) {
+            out.append(String(rest[a.upperBound..<b.lowerBound]))
+            rest = rest[b.upperBound...]
+        }
+        return out
+    }
+
+    private func notice(_ text: String, _ ts: Date) {
+        guard text.contains("<task-notification>") else { return }
+        let ids = tags("task-id", in: text)
+        if ids.contains(where: { !$0.hasPrefix("__orphan") }) { lastNotice = max(lastNotice, ts.timeIntervalSince1970) }
+        let status = tags("status", in: text).first ?? ""
+        let event = tags("event", in: text).first ?? ""
+        let monitorEnded = event.hasPrefix("[Monitor") && ["expired", "ended", "exited", "stopped", "finished"].contains { event.contains($0) }
+        if ["completed", "failed", "killed", "stopped"].contains(status) || monitorEnded {
+            for id in ids { pending.removeValue(forKey: id) }
+        }
+    }
+}
+
 // MARK: - Session-Überwachung
 
 final class SessionMonitor {
     private(set) var sessions: [SessionRecord] = []
+    private var scanners: [String: TranscriptScanner] = [:]
+    private(set) var background: [String: [BGTask]] = [:]   // sessionId → laufende Hintergrundaufgaben
 
     var aggregate: LightState {
         sessions.max { $0.state.priority < $1.state.priority }?.state ?? .off
@@ -280,6 +421,7 @@ final class SessionMonitor {
         let fm = FileManager.default
         let files = (try? fm.contentsOfDirectory(at: sessionsDir, includingPropertiesForKeys: nil)) ?? []
         var result: [SessionRecord] = []
+        var bg: [String: [BGTask]] = [:]
         let now = Date().timeIntervalSince1970
 
         for url in files where url.pathExtension == "json" {
@@ -298,9 +440,36 @@ final class SessionMonitor {
                 rec.updated = now
                 if let out = try? JSONEncoder().encode(rec) { try? out.write(to: url, options: .atomic) }
             }
+
+            // Nur Anzeige (wird nie auf die Platte geschrieben): „grün“ stimmt nicht, solange Hintergrundaufgaben laufen
+            let scanner = scanners[rec.sessionId] ?? TranscriptScanner()
+            scanners[rec.sessionId] = scanner
+            scanner.update(path: rec.transcript)
+            let tasks = scanner.active()
+            if rec.state == .green {
+                if scanner.lastNotice > rec.updated, !wasInterrupted(rec.transcript) {
+                    rec.state = .red   // Aufgabe fertig / Monitor-Ereignis → Modell denkt schon, aber noch kein Hook
+                    rec.event = "TaskNotification"
+                } else if !tasks.isEmpty {
+                    rec.state = .background
+                }
+            }
+            if !tasks.isEmpty { bg[rec.sessionId] = tasks }
             result.append(rec)
         }
+        scanners = scanners.filter { id, _ in result.contains { $0.sessionId == id } }
+        background = bg
         sessions = result.sorted { $0.updated > $1.updated }
+    }
+
+    /// Kurzbeschreibung der Hintergrundaufgaben, z. B. "Shell ×2 · Monitor ×1".
+    func backgroundSummary(_ sessionId: String) -> String? {
+        guard let tasks = background[sessionId], !tasks.isEmpty else { return nil }
+        let kinds: [BGTask.Kind] = [.shell, .monitor, .agent]
+        return kinds.compactMap { k in
+            let n = tasks.filter { $0.kind == k }.count
+            return n > 0 ? "\(k.rawValue) ×\(n)" : nil
+        }.joined(separator: " · ")
     }
 
     private func wasInterrupted(_ path: String) -> Bool {
@@ -416,6 +585,8 @@ final class TrafficLightView: NSView {
     var showQuota = true { didSet { needsDisplay = true } }
     var uiScale: CGFloat = 1.0 { didSet { needsDisplay = true } }
     var blinkOn = true { didSet { if state == .yellow { needsDisplay = true } } }
+    /// Atmen der blauen Lampe (0…1); nur aktiv, solange Hintergrundaufgaben laufen
+    var pulse: CGFloat = 1 { didSet { if state == .background { needsDisplay = true } } }
     var onRightClick: ((NSEvent) -> Void)?
 
     override var mouseDownCanMoveWindow: Bool { true }
@@ -426,6 +597,7 @@ final class TrafficLightView: NSView {
         case .red: return NSColor(calibratedRed: 1.0, green: 0.23, blue: 0.19, alpha: 1)
         case .yellow: return NSColor(calibratedRed: 1.0, green: 0.80, blue: 0.0, alpha: 1)
         case .green: return NSColor(calibratedRed: 0.20, green: 0.90, blue: 0.35, alpha: 1)
+        case .background: return NSColor(calibratedRed: 0.20, green: 0.55, blue: 1.0, alpha: 1)
         case .off: return .gray
         }
     }
@@ -502,6 +674,22 @@ final class TrafficLightView: NSView {
         housing.lineWidth = 1
         housing.stroke()
 
+        // Blaues, atmendes Leuchten um das Gehäuse (Verlauf: innen kräftig, nach außen ausklingend)
+        if state == .background {
+            let blue = color(for: .background)
+            let layers = 5
+            for i in (0..<layers).reversed() {
+                let t = CGFloat(i) / CGFloat(layers)            // 0 = am Gehäuse, → 1 = außen
+                let outset = 1 + CGFloat(i)                     // 1-pt-Ringe lückenlos nebeneinander
+                let alpha = CGFloat(pow(Double(1 - t), 1.6)) * (0.25 + 0.75 * pulse)
+                let ring = NSBezierPath(roundedRect: body.insetBy(dx: -outset, dy: -outset),
+                                        xRadius: radius + outset, yRadius: radius + outset)
+                ring.lineWidth = 1
+                blue.withAlphaComponent(alpha).setStroke()
+                ring.stroke()
+            }
+        }
+
         if showQuota {
             let card = NSRect(x: body.minX, y: pad, width: body.width, height: section - 6 * uiScale)
             drawGauge(in: card, wellRadius: 15 * uiScale)
@@ -516,7 +704,8 @@ final class TrafficLightView: NSView {
             let rect = NSRect(x: body.midX - d / 2, y: cy - d / 2, width: d, height: d)
             let circle = NSBezierPath(ovalIn: rect)
             let c = color(for: lamp)
-            let lit = lamp == state && (state != .yellow || blinkOn)
+            // Hintergrundaufgaben: die rote Lampe bleibt an, das Gehäuse bekommt einen blauen Ring
+            let lit = (lamp == state || (state == .background && lamp == .red)) && (state != .yellow || blinkOn)
 
             // Lampenfassung
             NSColor(white: 0.03, alpha: 1).setFill()
@@ -557,6 +746,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var lightView: TrafficLightView!
     private var timer: Timer?
     private var blinkTimer: Timer?
+    private var pulseTimer: Timer?
     private let defaults = UserDefaults.standard
 
     private var monitoringEnabled: Bool {
@@ -600,6 +790,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in
             guard let v = self?.lightView else { return }
             v.blinkOn = v.state == .yellow ? !v.blinkOn : true
+        }
+        // Blaues Leuchten „atmet“ langsam (Periode 2,4 s) – anders als das schnelle Blinken von Gelb
+        pulseTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            guard let self, self.lightView.state == .background else { return }
+            let p = 0.5 + 0.5 * CGFloat(sin(Date().timeIntervalSinceReferenceDate * 2 * .pi / 2.4))
+            self.lightView.pulse = p
+            let q = (p * 6).rounded() / 6
+            if q != self.statusPulse { self.statusPulse = q; self.updateStatusItem(.background) }
         }
     }
 
@@ -682,6 +880,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if lightView.state != state {
             lightView.state = state
             lightView.blinkOn = true
+            lightView.pulse = 1
         }
         updateStatusItem(state)
         let minute = Int(Date().timeIntervalSince1970 / 60)
@@ -693,17 +892,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private var statusKey = ""
+    /// Atemphase der Menüleiste, auf 6 Stufen gerundet (Bild wird nur bei Stufenwechsel neu gezeichnet)
+    private var statusPulse: CGFloat = 1
 
     /// Menüleiste: Ampelpunkt + zwei Zeilen (5h oben, 7d unten) mit Balken, Rest-% und Zeit bis zum Reset.
     private func updateStatusItem(_ state: LightState) {
         guard let button = statusItem.button else { return }
         let rows: [(String, QuotaWindow)] = monitoringEnabled && showQuota && showStatusQuota
             ? [("5h", quota?.fiveHour), ("7d", quota?.sevenDay)].compactMap { n, w in w.map { (n, $0) } } : []
-        let key = "\(I18n.lang)|\(monitoringEnabled)|\(state)|" + rows.map { "\($0.0)\(Int($0.1.remaining.rounded()))\($0.1.countdown ?? "…")" }.joined(separator: "|")
+        let key = "\(I18n.lang)|\(monitoringEnabled)|\(state)|\(state == .background ? statusPulse : 1)|" + rows.map { "\($0.0)\(Int($0.1.remaining.rounded()))\($0.1.countdown ?? "…")" }.joined(separator: "|")
         guard key != statusKey else { return }
         statusKey = key
 
-        guard !rows.isEmpty else {   // klassisch: nur Emoji
+        let isBG = state == .background
+        guard !rows.isEmpty else {   // klassisch: nur Emoji (bei Hintergrundaufgaben roter Punkt mit blauem Ring)
+            if isBG && monitoringEnabled {
+                button.title = ""
+                button.imagePosition = .imageOnly
+                button.image = dotImage(lamp: lightView.color(for: .red), ring: lightView.color(for: .background), pulse: statusPulse)
+                return
+            }
             button.image = nil
             button.imagePosition = .noImage
             button.attributedTitle = NSAttributedString(string: monitoringEnabled ? state.emoji : "⚫️",
@@ -712,10 +920,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         button.title = ""
         button.imagePosition = .imageOnly
-        button.image = statusImage(lamp: lightView.color(for: state), lit: state != .off, rows: rows)
+        button.image = statusImage(lamp: lightView.color(for: isBG ? .red : state), lit: state != .off,
+                                   ring: isBG ? lightView.color(for: .background) : nil, pulse: statusPulse, rows: rows)
     }
 
-    private func statusImage(lamp: NSColor, lit: Bool, rows: [(String, QuotaWindow)]) -> NSImage {
+    /// Ampelpunkt, optional mit blauem Leuchten (Hintergrundaufgaben). Ringe liegen exakt auf dem Pixelraster
+    /// (1-pt-Linien, Mittellinie auf halben Punkten) und sind konzentrisch zum Punkt.
+    private static func drawDot(_ dot: NSRect, lamp: NSColor, lit: Bool, ring: NSColor?, pulse: CGFloat = 1) {
+        if let ring {
+            for (i, a) in [0.9, 0.5, 0.2].enumerated() {
+                let r = NSBezierPath(ovalIn: dot.insetBy(dx: -(CGFloat(i) + 0.5), dy: -(CGFloat(i) + 0.5)))
+                r.lineWidth = 1
+                ring.withAlphaComponent(CGFloat(a) * (0.3 + 0.7 * pulse)).setStroke()
+                r.stroke()
+            }
+        }
+        NSGraphicsContext.saveGraphicsState()
+        if lit {
+            let g = NSShadow(); g.shadowColor = lamp.withAlphaComponent(0.8); g.shadowBlurRadius = 3; g.shadowOffset = .zero; g.set()
+        }
+        (lit ? lamp : NSColor.secondaryLabelColor).setFill()
+        NSBezierPath(ovalIn: dot).fill()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private func dotImage(lamp: NSColor, ring: NSColor, pulse: CGFloat) -> NSImage {
+        NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            Self.drawDot(NSRect(x: 4, y: 4, width: 10, height: 10), lamp: lamp, lit: true, ring: ring, pulse: pulse)
+            return true
+        }
+    }
+
+    private func statusImage(lamp: NSColor, lit: Bool, ring: NSColor?, pulse: CGFloat, rows: [(String, QuotaWindow)]) -> NSImage {
         let h: CGFloat = 22, lampD: CGFloat = 10
         let labelFont = NSFont.systemFont(ofSize: 7.5, weight: .semibold)
         let pctFont = NSFont.monospacedDigitSystemFont(ofSize: 8.5, weight: .bold)
@@ -726,14 +962,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         return NSImage(size: NSSize(width: width, height: h), flipped: false) { _ in
             // Ampelpunkt
-            let dot = NSRect(x: 4, y: (h - lampD) / 2, width: lampD, height: lampD)
-            NSGraphicsContext.saveGraphicsState()
-            if lit {
-                let g = NSShadow(); g.shadowColor = lamp.withAlphaComponent(0.8); g.shadowBlurRadius = 3; g.shadowOffset = .zero; g.set()
-            }
-            (lit ? lamp : NSColor.secondaryLabelColor).setFill()
-            NSBezierPath(ovalIn: dot).fill()
-            NSGraphicsContext.restoreGraphicsState()
+            Self.drawDot(NSRect(x: 4, y: (h - lampD) / 2, width: lampD, height: lampD), lamp: lamp, lit: lit, ring: ring, pulse: pulse)
 
             func text(_ str: String, _ font: NSFont, _ color: NSColor, x: CGFloat, baseline: CGFloat, width: CGFloat = 0, right: Bool = false) {
                 let a = NSAttributedString(string: str, attributes: [.font: font, .foregroundColor: color])
@@ -809,9 +1038,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard monitoringEnabled else { return tr("已暂停", "Paused", "Pausiert") }
         var lines = monitor.sessions.isEmpty
             ? [LightState.off.label]
-            : monitor.sessions.map { "\($0.state.emoji) \(projectName($0.cwd)) – \($0.state.label)" }
+            : monitor.sessions.map { "\($0.state.emoji) \(projectName($0.cwd)) – \(stateText($0))" }
         lines += quotaLines
         return lines.joined(separator: "\n")
+    }
+
+    /// Zustandstext einer Session; bei Hintergrundaufgaben mit Art und Anzahl.
+    private func stateText(_ s: SessionRecord) -> String {
+        guard s.state == .background, let sum = monitor.backgroundSummary(s.sessionId) else { return s.state.label }
+        return "\(s.state.label) (\(sum))"
     }
 
     private func projectName(_ cwd: String) -> String {
@@ -832,8 +1067,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if monitoringEnabled && !monitor.sessions.isEmpty {
             menu.addItem(.separator())
             for s in monitor.sessions {
-                let item = NSMenuItem(title: "\(s.state.emoji)  \(projectName(s.cwd))  ·  \(s.state.label)", action: nil, keyEquivalent: "")
-                item.toolTip = s.cwd
+                let item = NSMenuItem(title: "\(s.state.emoji)  \(projectName(s.cwd))  ·  \(stateText(s))", action: nil, keyEquivalent: "")
+                item.toolTip = ([s.cwd] + (monitor.background[s.sessionId] ?? []).map { "• \($0.kind.rawValue): \($0.title)" }).joined(separator: "\n")
                 item.isEnabled = false
                 menu.addItem(item)
             }
@@ -934,6 +1169,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
     }
+}
+
+// Debug: `Lumen --scan <transcript.jsonl>` zeigt die laufenden Hintergrundaufgaben eines Transkripts.
+if let i = CommandLine.arguments.firstIndex(of: "--scan"), i + 1 < CommandLine.arguments.count {
+    let sc = TranscriptScanner()
+    sc.update(path: CommandLine.arguments[i + 1])
+    let tasks = sc.active()
+    print("pending=\(tasks.count) lastNotice=\(sc.lastNotice)")
+    tasks.forEach { print("  \($0.kind.rawValue)\t\($0.started)\t\($0.title)") }
+    exit(0)
 }
 
 let app = NSApplication.shared
